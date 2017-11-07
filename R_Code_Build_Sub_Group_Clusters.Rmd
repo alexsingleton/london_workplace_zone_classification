@@ -1,0 +1,362 @@
+---
+title: "London Classification of Workplace Zones - Sub Group Clusters"
+---
+
+```{r message=FALSE, warning=FALSE,echo=FALSE}
+# First we load packages that contain functions needed for the analysis; and additionally set the working directory.
+# Packages
+library(downloader)
+library(dplyr)
+library(XLConnect)
+library(rgeos)
+library(rgdal)
+library(gdalUtils)
+library(raster)
+library(sqldf)
+library(tmap)
+library(ggplot2)
+library(spatialEco)
+library(tmaptools)
+library(corrplot)
+library(vegan)
+library(psych)
+library(car)
+library(knitr)
+library(skmeans)
+library(plyr)
+library(pander)
+library(RColorBrewer)
+
+library(colorspace)   ## hsv colorspace manipulations
+library(RColorBrewer) ## For some example colors
+
+## Function for desaturating colors by specified proportion (http://stackoverflow.com/questions/26314701/r-reducing-colour-saturation-of-a-colour-palette)
+desat <- function(cols, sat=0.5) {
+    X <- diag(c(1, sat, 1)) %*% rgb2hsv(col2rgb(cols))
+    hsv(X[1,], X[2,], X[3,])
+}
+
+# Set working directory
+setwd("~/Dropbox/Projects/WZ_Classification/")
+
+knitr::opts_chunk$set(cache=TRUE)
+
+options(warn=-1)
+
+# Load clustering input
+load(file="./Rdata_Files/Master_Input_1_0_CUT_Final.RData")
+
+# Import lookup tables
+Lookup <- read.csv("Final_Cluster_Lookup.csv")
+
+# Load input % data
+load(file="./Rdata_Files/Master_Input.Rdata")
+
+#Import Shapefile
+WZ_London <- readOGR(dsn = "./Shapefiles/", layer = "WZ_London_clip", verbose = FALSE)
+
+
+# Import lookup tables
+Input_Variable_Descriptions <- read.csv("Input_Variable_Descriptions.csv")
+
+
+```
+
+
+
+```{r message=FALSE, warning=FALSE,echo=FALSE}
+# Cut down lookup
+Lookup <- Lookup[,c(-1,-4)]
+
+Master_Input_1_0_CUT <- merge(Master_Input_1_0_CUT,Lookup,by="WZ_CODE")
+Population <- Master_Input_1_0_CUT[,c("WZ_CODE","WP102EW0001")]
+Master_Input_1_0_CUT$WP102EW0001 <- NULL
+Master_Input_1_0_CUT$WP102EW0003 <- NULL
+
+
+
+#Split data frame by cluster
+Master_Input_1_0_CUT <- split(Master_Input_1_0_CUT,Master_Input_1_0_CUT$Cluster)
+
+```
+
+
+## Estimate Cluster Frequency
+
+**Figure 1: Clustergrams**
+
+```{r echo = FALSE, message=FALSE,warning=FALSE}
+
+source("https://gist.githubusercontent.com/hadley/439761/raw/a7027786f34e4819dc411496b61a34c02f7c1586/clustergram-had.r")
+
+
+for (i in 1:length(Master_Input_1_0_CUT)){
+
+dat <- Master_Input_1_0_CUT[[i]][,-1]
+dat$Cluster <- NULL
+
+
+k_10 <- many_kmeans(dat, 2:5,nstart = 50)
+pr <- princomp(dat)
+pr1 <- predict(pr)[, 1]
+pr2 <- predict(pr)[, 2]
+print(plot(clustergram(k_10, pr1)) + ggtitle(LETTERS[i]) + theme(plot.title = element_text(hjust = 0.5)))
+
+}
+
+```
+
+
+```{r echo = FALSE, warning=FALSE, eval=FALSE}
+
+splits <- c(3,2,3,4,3)# specify splits V1
+splits <- c(2,2,2,3,2)# specify splits V2
+
+all_results <- data.frame(WZ_CODE =NA,Group=NA,SubGroup=NA)# Initial data frame
+
+for (i in 1:length(Master_Input_1_0_CUT)){
+
+dat <- Master_Input_1_0_CUT[[i]][,-1] # subset
+dat$Cluster <- NULL
+
+
+### CALCULATES K MEANS
+
+# Basic K Means
+res <- kmeans(x=dat, centers=splits[i], iter.max=1000000, nstart=10000)
+res_C <- data.frame(WZ_CODE = Master_Input_1_0_CUT[[i]][,1],Group = LETTERS[i],SubGroup = paste0(LETTERS[i],res$cluster))
+
+all_results <- rbind(all_results,res_C) # Merge onto master list
+}
+
+all_results <- all_results[-1,]#trim NA row
+
+
+all_results <- merge(all_results,Population,by="WZ_CODE",all.x=TRUE)
+
+write.csv(all_results,"Final_Cluster_Lookup_With_Sub_Groups.csv")
+
+
+```
+
+
+```{r echo = FALSE}
+### CALCULATES INDEX SCORES
+
+# Read final results
+all_results <- read.csv("Final_Cluster_Lookup_With_Sub_Groups.csv")[-1]
+
+#Merge lookup onto original data
+tmp_res <- merge(all_results, Master_Input, by="WZ_CODE", all.x=TRUE)
+
+# London Average
+tmp_res_London_Averages <- as.data.frame(apply(tmp_res[,5:ncol(tmp_res)],2,summary))["Mean",]
+
+#London SubGroup Average
+tmp_res_London_SubGroup_Averages <- aggregate(tmp_res[,5:ncol(tmp_res)], by=list(tmp_res$SubGroup), FUN=mean)
+
+rownames(tmp_res_London_SubGroup_Averages) <- tmp_res_London_SubGroup_Averages$Group.1
+tmp_res_London_SubGroup_Averages$Group.1 <- NULL
+
+tmp_res_index <- data.frame(rownames(tmp_res_London_SubGroup_Averages))
+colnames(tmp_res_index) <- "SUBGROUP"
+
+# Calculate index scores (subgroups)
+for (i in 1:ncol(tmp_res_London_SubGroup_Averages)){
+ tmp <- data.frame(tmp_res_London_SubGroup_Averages[,i] / tmp_res_London_Averages[,i]) * 100
+ colnames(tmp) <- colnames(tmp_res_London_SubGroup_Averages)[i]
+ tmp_res_index <- cbind(tmp_res_index,tmp)
+}
+
+
+#GROUP INDEX
+
+#London SubGroup Average
+tmp_res_London_Group_Averages <- aggregate(tmp_res[,5:ncol(tmp_res)], by=list(tmp_res$Group), FUN=mean)
+
+rownames(tmp_res_London_Group_Averages) <- tmp_res_London_Group_Averages$Group.1
+tmp_res_London_Group_Averages$Group.1 <- NULL
+
+tmp_res_index_GROUP <- data.frame(rownames(tmp_res_London_Group_Averages))
+colnames(tmp_res_index_GROUP) <- "GROUP"
+
+# Calculate index scores (subgroups)
+for (i in 1:ncol(tmp_res_London_Group_Averages)){
+ tmp <- data.frame(tmp_res_London_Group_Averages[,i] / tmp_res_London_Averages[,i]) * 100
+ colnames(tmp) <- colnames(tmp_res_London_Group_Averages)[i]
+ tmp_res_index_GROUP <- cbind(tmp_res_index_GROUP,tmp)
+}
+
+# Write out index scores
+write.csv(tmp_res_index_GROUP,"INDEX_SCORES_GROUPS.csv")
+write.csv(tmp_res_index,"INDEX_SCORES_SUBGROUPS.csv")
+```
+
+# Clustering Results
+
+**Table 1: Cluster distribution**
+
+```{r echo = FALSE, results='asis', warning=FALSE,message=FALSE}
+
+res_Summary <- sqldf("SELECT SubGroup, SUM(WP102EW0001) AS Pop, COUNT(*) AS WZ_FRQ FROM all_results GROUP BY SubGroup")
+rownames(res_Summary) <- res_Summary$SubGroup
+res_Summary$SubGroup <- NULL
+res_Summary <- data.frame(SubGroup=rownames(res_Summary),Pop=res_Summary$Pop,WZ_FRQ=res_Summary$WZ_FRQ,WZ_PopPCT = round((res_Summary$Pop / 4500481 * 100),1),WZ_FRQPCT = round((res_Summary$WZ_FRQ / 8154 * 100),1))
+
+colnames(res_Summary) <- c("SubGroup","Total Population","WZ Frequency","Total Population Pct.","WZ Pct.")
+
+print(kable(res_Summary,format = "markdown"))
+
+
+```
+
+
+**Figure 3: London Map of the Clustering Results**
+
+
+```{r echo=FALSE}
+
+# This code creates the colour pallets
+
+#Get colours
+my_colour <- brewer.pal(length(splits),"Set1")
+
+# Creates a nested colour ramp
+final_col <- NA
+
+for (x in 1:length(my_colour)){
+
+  tmp_col <- NA
+    sat_tmp <- 1/splits[x]
+      for (j in 1:splits[x]){
+                o_col <- desat(my_colour[x], sat_tmp)
+        sat_tmp <- sat_tmp + (1/splits[x])
+        tmp_col <- c(tmp_col,o_col)
+      }
+    final_col <- c(final_col,tmp_col[-1])
+}
+
+final_col <- final_col[-1]
+```
+
+
+
+```{r echo = FALSE,warning=FALSE,message=FALSE}
+
+tmp9 <- WZ_London
+tmp9 <- merge(tmp9,all_results,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+ m <- tm_shape(tmp9,projection = 27700) +
+  tm_polygons("SubGroup",  title="Cluster ID",border.col =NA, border.alpha = 0, fill = final_col) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65) +
+  tm_scale_bar(width=0.1)
+  print(m)
+  
+  
+  
+```
+
+
+# Appendix
+
+
+```{r echo=FALSE, results='asis'}
+
+### PRINTS THE TOP INDEX SCORES
+
+tmp_g <- as.character(tmp_res_index$SUBGROUP)
+
+for ( i in 1:length(tmp_g)) {
+#Extract top 10 attributes by index score
+tmp <- as.data.frame(t(tmp_res_index[tmp_res_index$SUBGROUP == tmp_g[i],2:ncol(tmp_res_index)]))
+colnames(tmp) <- "Index_Score"
+tmp$Variable <- rownames(tmp) #append variable name
+tmp <- merge(tmp, Input_Variable_Descriptions, by.x="Variable",by.y="Name",all.x=TRUE) # Append full name
+
+      # Print Group name
+      pandoc.header(paste("Group - ",as.character(tmp_g[i]),"Map"), level = 2)
+      
+      #Create Group Map
+  m <- tm_shape(tmp9,projection = 27700) +
+  tm_polygons("#AEB6BF",border.col =NA, border.alpha = 0) +
+  tm_shape(tmp9[tmp9$SubGroup == tmp_g[i],],projection = 27700) +
+  tm_polygons("#283747",border.col =NA, border.alpha = 0) +
+  tm_scale_bar(width=0.1) +
+   tm_layout(frame = FALSE)
+  print(m)
+  cat("\n") 
+      
+  # Print Group name
+  
+  pandoc.header(paste("Sub Group - ",as.character(tmp_g[i]),"Profiles"), level = 2)
+
+      # Printing loop for each domain
+      for (x in 1:length(unique(tmp$Domain))) {
+        
+        #Subset to the selected domain
+        tmp2 <- tmp[tmp$Domain == unique(tmp$Domain)[x],]
+        #Create domain label
+        domain <- unique(tmp2$Domain)
+          
+            #Select an ordered list of index scores (high to low) that are greater than 120
+        pandoc.header(paste("Domain - ",domain), level = 3)
+  
+        #Count number of scores greater than 120
+        G120 <- as.numeric(table(tmp2$Index_Score >= 120)["TRUE"])
+        
+        #Loops to check that there were scores over 120
+        if (!is.na(G120)) {
+              # Print a table of index scores      
+             print(kable(arrange(tmp2,desc(Index_Score))[1:G120,c("Index_Score","Description")],format = "markdown",digits=0,align='l'))
+          
+        } else {
+          pandoc.p("No scores over 120")
+        } # End loops to check that there were scores over 120
+        
+      } # End printing loop for each domain
+
+rm(tmp)
+rm(tmp2)
+}
+
+```
+
+
+
+
+
+
+```{r echo=FALSE, comment=NA, results='asis',warning=FALSE}
+
+library(scales)
+library(ggplot2)
+
+for (x in 2:ncol(tmp_res_index)) {
+
+#Get scores
+C_Scores <- tmp_res_index[,c("SUBGROUP",colnames(tmp_res_index)[x])]
+
+#Adjust scores for the plot
+C_Scores[,2] <-  C_Scores[,2] / 100 - 1
+
+
+
+           
+# Make Plot
+p <- ggplot(C_Scores, aes_string(x="SUBGROUP", y=names(C_Scores)[2])) + 
+  geom_bar(stat = "identity", fill = final_col, position="identity") + 
+  theme(axis.text.x=element_text(angle=-90,hjust=0,vjust=0.5)) + 
+  geom_text(aes(label = paste(round(C_Scores[,2] * 100,digits = 0), "%"), vjust = ifelse(C_Scores[,2] >= 0, -0.5, 1.5)), size=3) +
+  scale_y_continuous(paste("Diff. from London Av","-",round(as.numeric(tmp_res_London_Averages[names(C_Scores)[2]]),2),"%"),labels = percent_format()) +
+  scale_x_discrete("Cluster") +
+  ggtitle(paste(Input_Variable_Descriptions[Input_Variable_Descriptions$Name == names(C_Scores)[2],"Domain"],"-",Input_Variable_Descriptions[Input_Variable_Descriptions$Name == names(C_Scores)[2],"Description"]))
+
+print(p)
+
+}
+
+```
+
+
+
+

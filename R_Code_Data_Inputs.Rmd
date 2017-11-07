@@ -1,0 +1,1253 @@
+---
+title: "London Classification of Workplace Zones - Data Inputs"
+---
+
+```{r message=FALSE, warning=FALSE,echo=FALSE}
+# First we load packages that contain functions needed for the analysis; and additionally set the working directory.
+# Packages
+library(downloader)
+library(dplyr)
+library(XLConnect)
+library(rgeos)
+library(rgdal)
+library(gdalUtils)
+library(raster)
+library(sqldf)
+library(tmap)
+library(ggplot2)
+library(spatialEco)
+library(tmaptools)
+library(corrplot)
+library(vegan)
+library(psych)
+library(car)
+library(knitr)
+library(skmeans)
+library(plyr)
+require(reshape)
+
+# Set working directory
+setwd("~/Dropbox/Projects/WZ_Classification/")
+
+knitr::opts_chunk$set(cache=TRUE)
+
+options(scipen=999)
+
+```
+
+## Census Inputs
+
+```{r eval=FALSE, echo=FALSE}
+
+###################################################################################################################################
+# Workzone census data
+###################################################################################################################################
+# Get a list of the WZ tables
+wz_tab_list <- read.csv("WZ_tab_list.csv",header = FALSE)
+
+# WZ Code to higher geography - extract a list for London (Source: http://ons.maps.arcgis.com/home/item.html?id=4ad8bfadafa344c0b3719f4741e0e506)
+wz_lookup <- read.csv("WZ11_BUASD11_BUA11_LAD11_RGN11_EW_LU.csv")
+
+#Setup data frames to store meta data and descriptions
+Descriptions <- data.frame(ColumnVariableCode=character(),
+                 ColumnVariableMeasurementUnit=character(), 
+                 ColumnVariableStatisticalUnit=character(), 
+                 ColumnVariableDescription=character(),
+                 stringsAsFactors=FALSE) 
+
+Meta <- data.frame(DatasetId=as.Date(character()),
+                   DatasetTitle=character(), 
+                   StatisticalPopulations=character(), 
+                   Annotations=character(),
+                   stringsAsFactors=FALSE) 
+
+# Extract a list of WZ for Greater London
+wz_London <- data.frame(WZ_CODE = wz_lookup[wz_lookup$RGN11NM == "London",c("WZ11CD")])
+
+# Download WZ census data
+
+for (i in 1:nrow(wz_tab_list)) {
+  
+      t_ <- tolower(wz_tab_list[i,1]) #Get variable
+
+      download(paste0("https://www.nomisweb.co.uk/output/census/2011/",t_,"_wpzone.zip"),paste0(t_,"_wpzone.zip"), mode = "wb") # Download File
+      
+      unzip(paste0(t_,"_wpzone.zip"),junkpaths=TRUE,exdir = paste0("./",t_,"/")) # Unzip
+      
+      t_data <- read.csv(paste0("./",t_,"/",toupper(t_),"DATA.CSV")) # Read Data
+      t_desc <- read.csv(paste0("./",t_,"/",toupper(t_),"DESC0.CSV")) # Read Descriptions
+      t_meta <- read.csv(paste0("./",t_,"/",toupper(t_),"META0.CSV")) # Read Metadata
+      
+      Descriptions <- rbind(Descriptions,t_desc) # rbind the current descriptions to the master data frame
+      Meta <- rbind(Meta,t_meta) # rbind the current meta data to the master data frame
+      wz_London <- merge(wz_London,t_data, by.x="WZ_CODE",by.y="GeographyCode", all.x=TRUE) # merge data into master data frame
+      
+      #Delete zip and files
+      file.remove(paste0(t_,"_wpzone.zip"))
+      unlink(paste0(t_),recursive = TRUE)
+
+}
+
+# Write created objects
+save(wz_London, Meta, Descriptions, file="./Rdata_Files/WZ_Census.RData")
+```
+
+
+```{r echo=FALSE}
+# Load WZ Census data
+load("./Rdata_Files/WZ_Census.RData")
+```
+
+**Table 1: Example raw Workplace Zone Census data for ten areas**
+
+```{r echo=FALSE,results='asis'}
+# Print an example table
+kable(wz_London[1:10,1:10])
+```
+
+```{r eval= FALSE, echo=FALSE}
+
+###################################################################################################################################
+# Residential census data
+###################################################################################################################################
+
+# Selected tables of residential data
+res_tables <- c("KS402EW","QS103EW","KS107EW","KS106EW","KS501EW","KS601EW","KS102EW")
+
+# OA lookup to regions (source: http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/external-links/social-media/g-m/2011-oas-to-regions-in-england.html)
+oa_lookup <- read.csv("OA11_RGN11_EN_LU.csv")
+
+#Setup data frames to store meta data and descriptions
+Descriptions_R <- data.frame(ColumnVariableCode=character(),
+                           ColumnVariableMeasurementUnit=character(), 
+                           ColumnVariableStatisticalUnit=character(), 
+                           ColumnVariableDescription=character(),
+                           stringsAsFactors=FALSE) 
+
+Meta_R <- data.frame(DatasetId=as.Date(character()),
+                   DatasetTitle=character(), 
+                   StatisticalPopulations=character(), 
+                   Annotations=character(),
+                   stringsAsFactors=FALSE)
+
+
+# Extract a list of OA for Greater London and surrounding regions
+oa_London <- data.frame(OA_CODE = oa_lookup[oa_lookup$RGN11NM %in% c("London","East of England","South East"),"OA11CD"])
+
+# Download OA census data
+
+for (i in 1:length(res_tables)) {
+  
+  t_ <- tolower(res_tables[i]) #Get variable
+  
+  download(paste0("https://www.nomisweb.co.uk/output/census/2011/",t_,"_2011_oa.zip"),paste0(t_,"_2011_oa.zip"), mode = "wb") # Download File
+  
+  unzip(paste0(t_,"_2011_oa.zip"),junkpaths=TRUE,exdir = paste0("./",t_,"/")) # Unzip
+  
+  t_data <- read.csv(paste0("./",t_,"/",toupper(t_),"DATA.CSV")) # Read Data
+  t_desc <- read.csv(paste0("./",t_,"/",toupper(t_),"DESC0.CSV")) # Read Descriptions
+  t_meta <- read.csv(paste0("./",t_,"/",toupper(t_),"META0.CSV")) # Read Metadata
+  
+  Descriptions_R <- rbind(Descriptions_R,t_desc) # rbind the current descriptions to the master data frame
+  Meta_R <- rbind(Meta_R,t_meta) # rbind the current meta data to the master data frame
+  oa_London <- merge(oa_London,t_data, by.x="OA_CODE",by.y="GeographyCode", all.x=TRUE) # merge data into master data frame
+  
+  #Delete zip and files
+  file.remove(paste0(t_,"_2011_oa.zip"))
+  unlink(paste0(t_),recursive = TRUE)
+  
+}
+
+# Write created objects
+save(oa_London, Meta_R, Descriptions_R, file="./Rdata_Files/OA_Census.RData")
+
+
+
+```
+
+
+
+
+
+
+
+```{r echo=FALSE}
+# Load OA Census data
+load("./Rdata_Files/OA_Census.RData")
+```
+
+**Table 2: Example raw Output Area Census data for ten areas**
+
+```{r echo=FALSE,results='asis'}
+# Print an example table
+kable(oa_London[1:10,1:10])
+```
+
+## Mapping the correspondence between OAs and WZs
+
+```{r eval=FALSE, echo=FALSE}
+# Shapefiles
+
+# WZ - https://census.edina.ac.uk/easy_download_data.html?data=England_wz_2011
+WZ <- readOGR(dsn = "./Shapefiles/", layer = "england_wz_2011")
+WZ_London_Full <- WZ[WZ$code %in% wz_London$WZ_CODE,]
+
+#OA - https://census.edina.ac.uk/easy_download_data.html?data=England_oa_2011
+OA <- readOGR(dsn = "./Shapefiles/", layer = "england_oa_2011_clipped")
+OA_London <- OA[OA$code %in% oa_London$OA_CODE,]
+
+OA <- readOGR(dsn = "./Shapefiles/", layer = "england_oa_2011")
+OA_London_Full <- OA[OA$code %in% oa_London$OA_CODE,]
+
+# WZ require clipping to OA which have been pre-clipped by the extent (e.g. rivers etc)
+WZ_London_clip <- crop(WZ_London_Full, OA_London)
+
+#Write out files
+writeOGR(OA_London, "./Shapefiles/", "OA_London", driver="ESRI Shapefile")
+writeOGR(WZ_London_clip, "./Shapefiles/", "WZ_London_clip", driver="ESRI Shapefile")
+writeOGR(OA_London_Full, "./Shapefiles/", "OA_London_Full", driver="ESRI Shapefile")
+writeOGR(WZ_London_Full, "./Shapefiles/", "WZ_London_Full", driver="ESRI Shapefile")
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+OA_London <- readOGR(dsn = "./Shapefiles/", layer = "OA_London", verbose = FALSE)
+WZ_London <- readOGR(dsn = "./Shapefiles/", layer = "WZ_London_clip", verbose = FALSE)
+
+OA_London_Full <- readOGR(dsn = "./Shapefiles/", layer = "OA_London_Full", verbose = FALSE)
+WZ_London_Full <- readOGR(dsn = "./Shapefiles/", layer = "WZ_London_Full", verbose = FALSE)
+
+#Ensure uniform projection
+OA_London = spTransform(OA_London, CRS("+init=epsg:27700"))
+WZ_London = spTransform(WZ_London, CRS("+init=epsg:27700"))
+OA_London_Full = spTransform(OA_London_Full, CRS("+init=epsg:27700"))
+WZ_London_Full = spTransform(WZ_London_Full, CRS("+init=epsg:27700"))
+
+```
+
+
+**Figure 3: The Intersecting OA and WZ Geography**
+
+**A) An area of Central London, illustrating a large OA, divided into multiple WZ**
+
+```{r echo=FALSE}
+# Create Map
+  osm <- read_osm(OA_London[OA_London$code == "E00166755",])
+  qtm(osm) + 
+     qtm(WZ_London, borders = "blue",fill=NULL) +
+     qtm(OA_London[OA_London$code == "E00166755",], borders = "red",fill=NULL,scale=1.5)
+```
+
+**B) An area of South London, illustrating a WZ that is created from multiple OA**
+
+```{r echo=FALSE}
+# Create Map
+  osm <- read_osm(WZ_London[WZ_London$code == "E33032882",])
+  qtm(osm) + 
+    qtm(OA_London, borders = "red",fill=NULL) +
+     qtm(WZ_London[WZ_London$code == "E33032882",], borders = "blue",fill=NULL,scale=1.5)
+```
+
+**Table 3: Postcode Headcount**
+
+```{r echo=FALSE, results='asis'}
+HC_Census_2011 <- read.csv("Postcode_Estimates_Table_1.csv")
+# Print an example table
+kable(head(HC_Census_2011))
+```
+
+```{r echo=FALSE, warning=FALSE,message=FALSE}
+#The following code calculates the proportion of postcodes within an OA that overlap with WZ.
+
+# Postcode headcount 2011 census (Source: https://www.nomisweb.co.uk/census/2011/postcode_headcounts_and_household_estimates)
+#HC_Census_2011 <- read.csv("Postcode_Estimates_Table_1.csv")
+HC_Census_2011 <- HC_Census_2011[,1:2]
+HC_Census_2011$Postcode <- trim(gsub(" ","",HC_Census_2011$Postcode,fixed = TRUE))
+
+# ONSPD closest to the census 2011 - https://census.edina.ac.uk/pcluts_download.html?data=pcluts_2011may
+ONSPD <- read.csv("./ONSPD/ONSPD_MAY_2011_O.csv")
+ONSPD <- ONSPD[,c("pcd","gor","oseast1m" ,"osnrth1m","dointr", "doterm")]
+ONSPD$pcd <- trim(gsub(" ","",ONSPD$pcd, fixed = TRUE))
+
+# Merge ONSPD
+HC_Census_2011 <- merge(HC_Census_2011,ONSPD,by.x="Postcode",by.y="pcd",all.x=TRUE)
+
+# Subset to London (and surrounding regions), and remove junk lines
+HC_Census_2011 <- HC_Census_2011[HC_Census_2011$gor %in% c("E12000007","E12000008","E12000006"),]
+HC_Census_2011 <- HC_Census_2011[!is.na(HC_Census_2011$Postcode),]
+
+#Create a spatial point data frame from ONSPD
+coords <- cbind(Easting = as.numeric(as.character(HC_Census_2011$oseast1m)), Northing = as.numeric(as.character(HC_Census_2011$osnrth1m)))# Create coordinates for the ONSPD
+
+# Create the SpatialPointsDataFrame
+HC_Census_2011_SP <- SpatialPointsDataFrame(coords, data = HC_Census_2011, proj4string = CRS("+init=epsg:27700"))
+
+# Append OA Codes
+o <- over(HC_Census_2011_SP, OA_London_Full)
+colnames(o) <- c("OA_CODE","label","name")
+HC_Census_2011_SP@data <- cbind(HC_Census_2011_SP@data, o)
+
+# Append WZ Codes
+o <- over(HC_Census_2011_SP, WZ_London_Full)
+colnames(o) <- c("WZ_CODE","label","name")
+HC_Census_2011_SP@data <- cbind(HC_Census_2011_SP@data, o)
+
+#Clean up the table
+HC_Census_2011_SP@data <- HC_Census_2011_SP@data[,c("Postcode","Total","OA_CODE","WZ_CODE")]
+HC_Census_2011 <- HC_Census_2011_SP@data
+
+# Write created objects
+save(HC_Census_2011, file="./Rdata_Files/HC_Census_2011.RData")
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Create address proportions
+OA_WZ <- sqldf("SELECT OA_CODE, WZ_CODE, sum(Total) as N from HC_Census_2011 GROUP BY OA_CODE,WZ_CODE") # subset OA and WZ codes and calculate address counts for intersections
+
+OA_N <- sqldf("SELECT OA_CODE, sum(Total) as Base from HC_Census_2011 GROUP BY OA_CODE") # calculate number of postcodes within each OA
+OA_WZ <- merge(OA_WZ,OA_N, by = "OA_CODE", all.x=TRUE) # append these onto the lookup
+OA_WZ$Prop <- OA_WZ$N / OA_WZ$Base # calculate proportions
+
+# Write created objects
+save(OA_WZ, file="./Rdata_Files/OA_WZ.RData")
+```
+
+
+**Table 4: OA WZ proportions.**
+
+```{r echo=FALSE,results='asis'}
+kable(head(OA_WZ),digits = 2)
+
+```
+
+**Figure 4: An example of a missing WZ OA match.**
+
+```{r echo=FALSE}
+#for (i in 1:length(as.character(OA_London@data[!OA_London@data$code %in% unique(OA_WZ$OA_CODE),"code"]))){
+  
+
+
+  i=1
+    id <- as.character(OA_London@data[!OA_London@data$code %in% unique(OA_WZ$OA_CODE),"code"])[i] # Get ID
+  
+plot(OA_London[OA_London$code == id,])#plot polygon
+plot(WZ_London, col=NA, border="blue", add=TRUE)#plot polygon
+plot(HC_Census_2011_SP, pch=19, col="red", add=TRUE, cex=0.5)
+text(coordinates(HC_Census_2011_SP),labels=HC_Census_2011_SP$Total,cex= 0.5, pos=4)
+
+#}
+
+```
+
+```{r echo=FALSE}
+# Get zone centroids for OA and create spatial points data frame
+T_coords <- coordinates(OA_London[OA_London$code %in% as.character(OA_London@data[!OA_London@data$code %in% unique(OA_WZ$OA_CODE),"code"]),])
+T_data <- data.frame( OA = OA_London@data[OA_London$code %in% as.character(OA_London@data[!OA_London@data$code %in% unique(OA_WZ$OA_CODE),"code"]),])
+T_ <- SpatialPointsDataFrame(T_coords, data = T_data, proj4string = CRS("+init=epsg:27700"))
+
+# Append OA Codes
+o <- over(T_, WZ_London_Full)
+colnames(o) <- c("WZ_CODE","label","name")
+T_@data <- cbind(T_@data, o)
+
+# Create records to append to the lookup
+T_2 <- data.frame(OA_CODE=T_@data$OA,WZ_CODE=T_@data$WZ_CODE,N=NA,Base=NA,Prop=1)
+
+#Add missing rows to the table
+OA_WZ <- rbind(OA_WZ,T_2)
+
+# Remove NA row
+OA_WZ <- OA_WZ[!is.na(OA_WZ),]
+
+# Write created objects
+save(OA_WZ, file="./Rdata_Files/OA_WZ.RData")
+```
+
+**Figure 5: A histogram of the frequency of OA splits**
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# Calculate splits
+Splits <- data.frame(table(OA_WZ$OA_CODE))
+# qplot(Splits[Splits$Freq >1,"Freq"], geom="histogram",xlab = "Split Frq", ylab="Number of OA")
+df <- data.frame(a=as.numeric(Splits[Splits$Freq >1,"Freq"]))
+
+ggplot(df, aes(x=a)) + geom_histogram(binwidth = 2) + scale_x_continuous(name = "Frequency OA Splits (with headcount PCD)",
+                           breaks = seq(0, 40, 1),
+                           limits=c(1, 30))
+
+```
+
+**Figure 6: A map showing the frequency of OA splits**
+
+```{r echo=FALSE}
+OA_London_SPLIT <- merge(OA_London, Splits, by.x="code",by.y="Var1",all.x=TRUE)
+OA_London_SPLIT$Freq <- ifelse(OA_London_SPLIT$Freq == 1,NA,OA_London_SPLIT$Freq) # Create NA values for non splits
+
+# Map
+m <- tm_shape(OA_London_SPLIT,projection = 27700) +
+  tm_polygons("Freq",  title="OA Splits (N)",style="kmeans",  border.col =NA, border.alpha = 0, showNA= TRUE, colorNA="#afafaf",textNA = "No Split") +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65,aes.color = c(na="#afafaf"), legend.format = list(digits = 0))
+m
+
+
+
+
+```
+
+```{r echo=FALSE}
+# Merge OA WZ and calculate proportions
+OA_WZ <- merge(OA_WZ,oa_London[,c("OA_CODE","QS103EW0001")], by="OA_CODE",all.x=TRUE)
+OA_WZ <- data.frame(WZ_CODE=OA_WZ$WZ_CODE,QS103EW0001 = (OA_WZ[,"QS103EW0001"] * OA_WZ$Prop))
+
+# Create residential count for WZ
+WZ_RES <- aggregate(OA_WZ[,"QS103EW0001"], by=list(OA_WZ$WZ_CODE), "sum")
+colnames(WZ_RES) <- c("WZ_CODE","QS103EW0001")
+
+#Merge data
+WZ_MIX <- wz_London[,c("WZ_CODE","WP605EW0001")]
+WZ_MIX <- merge(WZ_MIX,WZ_RES,by="WZ_CODE",all.x=TRUE)
+WZ_MIX[is.na(WZ_MIX)] <- 0 #replace NA with 0
+
+# Calculate Residential Mix
+WZ_MIX$WD_R_MIX <- WZ_MIX$QS103EW0001 / WZ_MIX$WP605EW0001
+
+```
+
+**Figure 7: Workplace and Residential balance**
+
+```{r echo=FALSE}
+tmp7 <- WZ_London
+tmp7 <- merge(tmp7,WZ_MIX,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Map
+m <- tm_shape(tmp7,projection = 27700) +
+  tm_polygons("WD_R_MIX",  title="Residential Mix",style="jenks",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65)
+m
+```
+
+## Inter-Departmental Business Register (IDBR)
+
+The Inter-Departmental Business Register data contain frequencies of employees and workplaces within each workplace zone during 2009-2015, and are used to create a measure representing change within each WZ.
+
+```{r echo=FALSE}
+# Import number of workplaces and employees in Workplace Zones in London, 2009 to 2015 (Source: https://www.ons.gov.uk/businessindustryandtrade/business/activitysizeandlocation/adhocs/005995numberofworkplacesandemployeesinworkplacezonesinlondon2015)
+
+#Read data
+IDBR_workplaces <- readWorksheetFromFile("numbersofworkplacesandemployeesinlondonworkplacezones20092015.xls", startRow=2, sheet="workplaces")
+IDBR_employees <- readWorksheetFromFile("numbersofworkplacesandemployeesinlondonworkplacezones20092015.xls", startRow=2, sheet="employees")
+```
+
+```{r warning=FALSE,message=FALSE,echo=FALSE}
+# Cut down
+IDBR_workplaces <- IDBR_workplaces[IDBR_workplaces$Census.Workplace.Zone.code %in% WZ_London@data$code, 3:10]
+IDBR_employees <- IDBR_employees[IDBR_employees$Census.Workplace.Zone.code %in% WZ_London@data$code, 2:10]
+
+# Remove comma from employees and convert to numeric
+replace_cm <- function(x) {as.numeric(sub(",","",x))}
+IDBR_employees <- data.frame(WZ = IDBR_employees[,1:2],apply(IDBR_employees[,3:9], 2, replace_cm ))
+
+```
+
+**Figure 8: Missing values in the employee attributes of the IDBR**
+
+```{r echo=FALSE}
+# Identify those WZ with missing 2009 and 2015 Values
+IDBR_employees$Missing <- ifelse(is.na(IDBR_employees$X2009) & is.na(IDBR_employees$X2015),"Both",ifelse(is.na(IDBR_employees$X2009),"2009",ifelse(is.na(IDBR_employees$X2015),"2015","N/A")))
+
+# Create temporary wz sp object
+tmp <- merge(WZ_London,IDBR_employees,by.x="code",by.y="WZ.Census.Workplace.Zone.code",all.x=TRUE)
+
+# Employees Change
+m <-   tm_shape(tmp,projection = 27700) +
+  tm_fill("Missing",border.col = "grey50",  border.alpha = .5, title="Missing", showNA=FALSE,palette=c("#61A598","#DDD5A4","#3D3331","#E2E5EE")) +
+    tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65)
+m
+
+```
+
+
+```{r echo=FALSE}
+IDBR_workplaces$C_9_15 <- (IDBR_workplaces$X2015 - IDBR_workplaces$X2009) / (IDBR_workplaces$X2009 + 0.0001) * 100
+```
+
+```{r echo=FALSE,comment=NA}
+# Original
+x <- IDBR_workplaces$C_9_15
+summary(x)
+
+# New  
+x <- ifelse(x < quantile(x, 0.99), x, quantile(x, 0.99))
+
+summary(x)
+
+# Alter variable
+IDBR_workplaces$C_9_15 <- ifelse(x < quantile(x, 0.99), x, quantile(x, 0.99))
+```
+
+**Figure 9: Workplace frequency change 2009-2015**
+
+```{r echo= FALSE}
+# Create temporary wz sp object
+tmp_2 <- merge(WZ_London,IDBR_workplaces,by.x="code",by.y="Census.Workplace.Zone.code",all.x=TRUE)
+
+# Employment change 2009 - 2015
+m <-   tm_shape(tmp_2,projection = 27700) +
+   tm_polygons("C_9_15",  title="Workplace % Ch.",style="kmeans",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65)
+
+print(m)
+```
+
+
+## Local Data Company
+
+```{r  echo=FALSE}
+#Read data
+LDC <- read.csv("LiverpoolUniversityData_20160927.csv")
+
+# Clean lat / lon
+LDC$Latitude <- as.numeric(gsub("NULL","",LDC$Latitude)) #Lat
+LDC$Longitude <- as.numeric(gsub("NULL","",LDC$Longitude)) #Lon
+ 
+# Clean Postcode
+LDC$PostCode <- gsub(" ","",LDC$PostCode)
+
+# Remove empty rows
+LDC <- LDC[!is.na(LDC$Occupier),]
+
+# ONSPD current
+ONSPD <- read.csv("./ONSPD/ONSPD_FEB_2017_UK.csv")
+ONSPD <- ONSPD[,c("pcd","gor","oseast1m" ,"osnrth1m")]
+ONSPD$pcd <- gsub(" ","",ONSPD$pcd, fixed = TRUE)
+
+# Remove records with no Easting or Northing
+ONSPD <- ONSPD[!is.na(ONSPD$oseast1m),]
+ONSPD <- ONSPD[!is.na(ONSPD$osnrth1m),]
+
+#Create a spatial point data frame from ONSPD
+coords <- cbind(Easting = as.numeric(as.character(ONSPD$oseast1m)), Northing = as.numeric(as.character(ONSPD$osnrth1m)))# Create coordinates for the ONSPD
+
+# Create the SpatialPointsDataFrame
+ONSPD_SP <- SpatialPointsDataFrame(coords, data = ONSPD, proj4string = CRS("+init=epsg:27700"))
+
+# Create Lat / Lon for ONSPD
+ONSPD_SP <- spTransform(ONSPD_SP,CRS("+proj=longlat"))
+ONSPD_SP$Latitude_O <- coordinates(ONSPD_SP)[,2]
+ONSPD_SP$Longitude_O <- coordinates(ONSPD_SP)[,1]
+
+# Append lat / lon based on postcode and fill in NAs
+LDC <- merge(LDC, ONSPD_SP@data, by.x="PostCode",by.y="pcd", all.x=TRUE)
+LDC$Lat <- ifelse(is.na(LDC$Latitude),LDC$Latitude_O,LDC$Latitude)
+LDC$Lon <- ifelse(is.na(LDC$Longitude),LDC$Longitude_O,LDC$Longitude)
+
+#Subset to London and remove junk rows
+LDC <- LDC[LDC$gor == "E12000007",]
+LDC <- LDC[!is.na(LDC$Occupier),]
+
+# Create spatial point data frame and convert to OSGB
+LDC_SP <- SpatialPointsDataFrame(cbind(LDC$Lon, LDC$Lat), data = LDC, proj4string = CRS("+proj=longlat"))
+LDC_SP <- spTransform(LDC_SP,CRS("+init=epsg:27700"))
+
+# Append WZ Codes
+o <- over(LDC_SP, WZ_London_Full)
+colnames(o) <- c("WZ_CODE","label","name")
+LDC_SP@data <- cbind(LDC_SP@data, o)
+
+
+# Write created objects
+save(LDC_SP, file="./Rdata_Files/LDC_SP.RData")
+
+```
+
+```{r echo=FALSE}
+load(file="./Rdata_Files/LDC_SP.RData")
+```
+
+**Figure 10: LDC Units located outside of Greater London**
+
+**A) Retail unit location**
+
+```{r echo=FALSE}
+#Map of retailers
+plot(OA_London_Full,border="grey")
+plot(LDC_SP[is.na(LDC_SP@data$WZ_CODE),],add=TRUE,col="red")
+```
+
+```{r echo=FALSE}
+# Code to assign retailer to the nearest WZ
+pts <- LDC_SP[is.na(LDC_SP@data$WZ_CODE),]
+n <- length(pts)
+nearestWZ <- character(n)
+
+## For each point, find name of nearest polygon
+for (i in seq_along(nearestWZ)) {
+    nearestWZ[i] <- as.character(WZ_London_Full@data[which.min(gDistance(pts[i,], WZ_London_Full, byid=TRUE)),"code"])
+}
+
+```
+
+**B) Assignment of WZ**
+
+```{r echo=FALSE}
+#Map of retailers to illustrate nearest polygons
+plot(WZ_London_Full,border="grey")
+plot(WZ_London_Full[WZ_London_Full$code %in% nearestWZ,], col="blue",add=TRUE)
+plot(LDC_SP[is.na(LDC_SP@data$WZ_CODE),],add=TRUE,col="red")
+```
+
+```{r echo=FALSE}
+# The following nearest WZ records then need appending to the LDC object
+
+#Remove spatial polygon
+LDC <- LDC_SP@data[,c("Occupier","Name","Classification","Category","SubCategory","WZ_CODE")]
+
+# Extract records with missing WZ and append codes
+LDC_tmp <- LDC[is.na(LDC_SP@data$WZ_CODE),]
+LDC_tmp$WZ_CODE <- nearestWZ
+
+# Append new records and remove old
+LDC <- rbind(LDC,LDC_tmp)
+LDC <- LDC[!is.na(LDC$WZ_CODE),]
+
+```
+
+
+```{r echo=FALSE, warning=FALSE,message=FALSE}
+# Remove "Petrol Filling Stations"
+LDC <- LDC[LDC$Category != "Petrol Filling Stations",]
+
+# Frequency of retailers
+WZ_FR <- sqldf("SELECT WZ_CODE,count(*) as FR FROM LDC GROUP BY WZ_CODE")
+
+# Number Night-time businesses
+WZ_NTB <- sqldf("SELECT WZ_CODE,count(*) as NTB  FROM LDC WHERE Category IN ('Bars, Pubs & Clubs','Off Licences','Restaurants') OR SubCategory IN ('Fast Food Takeaway','Take Away Food Shops','Fish & Chip Shops','Pizza Takeaway','Chinese Fast Food Takeaway','Indian Takeaway','Fast Food Delivery','Amusement Parks & Arcades','Theatres & Concert Halls','Cinemas','Snooker, Billiards & Pool Halls','Bowling Alleys') GROUP BY WZ_CODE")
+
+# Number of comparison
+WZ_COMP <- sqldf("SELECT WZ_CODE,count(*) as COMP FROM LDC WHERE Classification = 'Comparison' GROUP BY WZ_CODE")
+
+# Number of convenience
+WZ_CONV <- sqldf("SELECT WZ_CODE,count(*) as CONV FROM LDC WHERE Classification = 'Convenience' GROUP BY WZ_CODE")
+
+# Number of leisure
+WZ_LEI <- sqldf("SELECT WZ_CODE,count(*) as LEI FROM LDC WHERE Classification = 'Leisure' GROUP BY WZ_CODE")
+
+# Number of service
+WZ_SER <- sqldf("SELECT WZ_CODE,count(*) as SER FROM LDC WHERE Classification = 'Service' GROUP BY WZ_CODE")
+
+#Create unified table
+WZ_LDC <- data.frame(WZ_CODE = wz_London$WZ_CODE)
+WZ_LDC <- merge(WZ_LDC,WZ_FR,by="WZ_CODE",all.x=TRUE)
+WZ_LDC <- merge(WZ_LDC,WZ_NTB,by="WZ_CODE",all.x=TRUE)
+WZ_LDC <- merge(WZ_LDC,WZ_COMP,by="WZ_CODE",all.x=TRUE)
+WZ_LDC <- merge(WZ_LDC,WZ_CONV,by="WZ_CODE",all.x=TRUE)
+WZ_LDC <- merge(WZ_LDC,WZ_LEI,by="WZ_CODE",all.x=TRUE)
+WZ_LDC <- merge(WZ_LDC,WZ_SER,by="WZ_CODE",all.x=TRUE)
+WZ_LDC[is.na(WZ_LDC)] <- 0 #replace NA with 0
+
+# Append Area
+
+WZ_Area <- data.frame(WZ_CODE = WZ_London$code,Area = (gArea(WZ_London,byid = TRUE) / 10000)) #retail / hectare (10k square m)
+WZ_LDC <- merge(WZ_LDC,WZ_Area,by="WZ_CODE",all.x=TRUE)
+
+
+# Calculate %
+WZ_LDC_PCT <- data.frame(WZ_CODE=WZ_LDC[,"WZ_CODE"],WZ_LDC[,2:7] / WZ_LDC[,"Area"])
+WZ_LDC_PCT[ is.na(WZ_LDC_PCT) ] <- 0
+```
+
+# Flows / London Commuting
+
+```{r echo=FALSE}
+# Source - https://www.nomisweb.co.uk/output/census/2011/wf02ew_oa.zip
+
+Flows <- read.csv("wf02ew_oa.csv",header = FALSE)
+colnames(Flows) <- c("OA_CODE","WZ_CODE","N")
+
+# Cut down WZ to those within London
+Flows <- Flows[Flows$WZ_CODE %in% WZ_London@data$code,]
+
+# Code OA as either inner or outer london
+Flows$OA_Type <- ifelse(Flows$OA_CODE %in% OA_London@data$code,"In","Out")
+
+#Calculate inside and outside london flows
+in_ <- sqldf("SELECT WZ_CODE, sum(N) AS Inside FROM Flows WHERE OA_Type = 'In' GROUP BY WZ_CODE ")
+out_ <- sqldf("SELECT WZ_CODE, sum(N) AS Outside FROM Flows WHERE OA_Type = 'Out' GROUP BY WZ_CODE ")
+
+# Merge and calculate rate
+WZ_in_out <- data.frame(WZ_CODE = wz_London$WZ_CODE)
+WZ_in_out <- merge(WZ_in_out,in_,by="WZ_CODE",all.x=TRUE)
+WZ_in_out <- merge(WZ_in_out,out_,by="WZ_CODE",all.x=TRUE)
+WZ_in_out$PCT_Outside <- (WZ_in_out$Outside / (WZ_in_out$Inside + WZ_in_out$Outside))*100
+WZ_in_out[ is.na(WZ_in_out) ] <- 0
+
+```
+
+**Figure 11: A map showing the % of workers within each WZ who commuted from outside of Greater London**
+
+```{r echo=FALSE}
+tmp4 <- WZ_London
+tmp4 <- merge(tmp4,WZ_in_out,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Map
+m <- tm_shape(tmp4,projection = 27700) +
+  tm_polygons("PCT_Outside",  title="%",style="jenks",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65, legend.format = list(digits=1))
+m
+```
+
+# Migration Turnover
+
+```{r echo=FALSE, eval=FALSE}
+#Import and isolate OA
+res_turn <- read.csv("ukmig008_oa.csv",skip = 10)
+tmp_res_turn <- data.frame(OA_CODE=oa_London$OA_CODE)
+res_turn <- merge(tmp_res_turn,res_turn,by.x="OA_CODE",by.y="Area.code",all.x=TRUE)
+#Create variable names
+res_turn <- data.frame(OA_CODE=res_turn$OA_CODE,AT_H_1Y = res_turn$Lived.at.same.address.one.year.ago, ALL_RES = res_turn$All.usual.residents)
+
+
+
+# Merge onto OA data
+oa_London <- merge(oa_London,res_turn,by.x="OA_CODE",by.y="OA_CODE",all.x=TRUE)
+
+# Write created objects
+save(oa_London, Meta_R, Descriptions_R, file="./Rdata_Files/OA_Census.RData")
+
+
+
+```
+
+
+## TfL Data
+
+```{r echo = FALSE}
+#Source: https://files.datapress.com/london/dataset/public-transport-accessibility-levels/2017-01-26T18:50:00/WPZone2011%20AvPTAI2015.xlsx
+
+# Read data
+WZ_PTAL <- read.csv("WPZone2011AvPTAI2015.csv")
+WZ_PTAL <- WZ_PTAL[,c("WorkplaceZone","AvPTAI2015")]
+```
+
+# Residential Context
+
+**Figure 12: Workplace Zones without residential postcodes**
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+tmp_6 <- WZ_London
+tmp_6 <- merge(tmp_6,WZ_RES,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Map
+tmp_6@data$Missing <- ifelse(is.na(tmp_6@data$QS103EW0001),1,2) # create missing flag
+
+#Create Plot
+cols <- c("#8da0cb","#66c2a5")
+plot(OA_London[OA_London@data$code == "E00166755",], axes = FALSE, border = NA)
+plot(tmp_6,border = "#D4D4D4",add=TRUE,col = cols[tmp_6@data$Missing])
+plot(OA_London[OA_London,],add=TRUE,border = "#A12323")
+plot(HC_Census_2011_SP, pch = 19, cex = 0.5, col = "#FF4500", add = TRUE)
+```
+
+
+```{r echo=FALSE,cache = FALSE,warning=FALSE,message=FALSE}
+# Import and trim the WZ population weighted centroids
+WZ_Pop_Centroids <- readOGR(dsn = "./Shapefiles/", layer = "england_wz_2011_centroids",verbose=FALSE)
+WZ_Pop_Centroids <- WZ_Pop_Centroids[WZ_Pop_Centroids@data$code %in% WZ_London@data$code,]
+WZ_Pop_Centroids <- spTransform(WZ_Pop_Centroids, CRS("+init=epsg:27700"))
+
+# Create Buffers
+WZ_Pop_Centroids_Buffers <- gBuffer(WZ_Pop_Centroids, width = 1250, byid = TRUE)
+WZ_Pop_Centroids_Buffers <- SpatialPolygonsDataFrame(WZ_Pop_Centroids_Buffers, WZ_Pop_Centroids@data)
+
+# Create address proportions
+OA_PCD <- sqldf("SELECT OA_CODE, sum(Total) as N from HC_Census_2011 GROUP BY OA_CODE") # OA total pop from headcount
+
+#Merge total OA counts and calculate proportions
+HC_Census_2011 <- merge(HC_Census_2011,OA_PCD,by="OA_CODE",all.x=TRUE)
+HC_Census_2011$Prop <- HC_Census_2011$Total / HC_Census_2011$N
+
+# Remove non count variables from London OA residential data
+cnt_var <- as.character(Descriptions_R[Descriptions_R$ColumnVariableMeasurementUnit == "Count","ColumnVariableCode"])
+oa_London_CUT <- oa_London[,c("OA_CODE",cnt_var,"AT_H_1Y","ALL_RES")] #note the added variables to look at churn
+
+# Append the residential data
+HC_Census_2011 <- merge(HC_Census_2011,oa_London_CUT,by="OA_CODE",all.x=TRUE)
+
+# Calculate weighted counts
+HC_Census_2011_RES <- data.frame(Postcode=HC_Census_2011$Postcode,HC_Census_2011[,7:ncol(HC_Census_2011)] * HC_Census_2011$Prop)
+
+# Merge onto the HC_Census_2011_SP
+HC_Census_2011_SP <- merge(HC_Census_2011_SP,HC_Census_2011_RES, by="Postcode",all.x=TRUE)
+
+#Remove non numeric
+HC_Census_2011_SP@data <- subset(HC_Census_2011_SP@data, select = -c(Postcode,Total,OA_CODE,WZ_CODE))
+
+# Point in Polygon
+o <- over(WZ_Pop_Centroids_Buffers,HC_Census_2011_SP,returnList=TRUE)
+
+# Calculate buffer values
+WZ_BufferCalc <- (lapply(o, colSums))
+# Unlist
+WZ_BufferCalc_Unlist <- data.frame(matrix(unlist(WZ_BufferCalc), nrow = length(WZ_BufferCalc), byrow = T)) 
+
+# Fix Colnames
+colnames(WZ_BufferCalc_Unlist) <- colnames(HC_Census_2011_SP@data)
+
+# Add ID
+WZ_BufferCalc_Unlist <- data.frame(WZ_CODE = WZ_Pop_Centroids_Buffers$code,WZ_BufferCalc_Unlist)
+
+```
+
+**Figure 13: Number of headcount postcode points within each buffer mapped by WZ**
+
+```{r echo=FALSE}
+# Postcode Frq Calc
+WZ_BufferCalc_NPostcodes <- (lapply(o, nrow))
+WZ_BufferCalc_NPostcodes <- data.frame(matrix(unlist(WZ_BufferCalc_NPostcodes), nrow = length(WZ_BufferCalc_NPostcodes), byrow = T))
+colnames(WZ_BufferCalc_NPostcodes) <- "N_Postcodes"
+WZ_BufferCalc_NPostcodes <- data.frame(WZ_CODE = WZ_Pop_Centroids_Buffers$code,WZ_BufferCalc_NPostcodes)
+
+tmp8 <- WZ_London
+tmp8 <- merge(tmp8,WZ_BufferCalc_NPostcodes,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Map
+m <- tm_shape(tmp8,projection = 27700) +
+  tm_polygons("N_Postcodes",  title="Postcodes (N)",style="kmeans",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65)
+print(m)
+
+```
+
+**Figure 14: WZ with no residential context**
+
+```{r echo=FALSE}
+# Create List
+buf <- as.character(WZ_BufferCalc_NPostcodes[WZ_BufferCalc_NPostcodes$N_Postcodes == 0,"WZ_CODE",])
+
+for (i in 1:length(buf)) {
+
+  osm <- read_osm(WZ_Pop_Centroids_Buffers[WZ_Pop_Centroids_Buffers$code %in% buf[i],],ext=2)
+  p <- qtm(osm,title=buf[i]) + 
+     qtm(WZ_Pop_Centroids_Buffers[WZ_Pop_Centroids_Buffers$code %in% buf[i],], borders = "red",fill=NULL) +
+     qtm(HC_Census_2011_SP,dots.col = "blue")
+     print(p)
+  
+}
+
+```
+
+# Calculating rates, evaluating inputs, and standardisation
+
+```{r echo=FALSE}
+# Import lookup tables
+Num_Dem_OA_Census <- read.csv("Num_Dem_OA_Census.csv")
+Num_Dem_WZ_Census <- read.csv("Num_Dem_WZ_Census_V3.csv") # V2 has the full variable set
+
+# Cut down to count
+Num_Dem_Census <- rbind(Num_Dem_WZ_Census,Num_Dem_OA_Census)
+Num_Dem_Census <- Num_Dem_Census[Num_Dem_Census$Type == "Count",]
+
+# Create a unified workplace zone census table
+Unified <- merge(WZ_BufferCalc_Unlist,wz_London,by="WZ_CODE")
+
+# Setup output object
+WZ_Census_Variables <- data.frame(WZ_CODE = Unified[,"WZ_CODE"])
+
+for (i in 1:nrow(Num_Dem_Census)) {
+          numerator <- trimws(unlist(strsplit(as.character(Num_Dem_Census[i,"Variable_Num"]),",")))
+          denominator <- trimws(unlist(strsplit(as.character(Num_Dem_Census[i,"Variable_Den"]),",")))
+    
+          # Extract and calculate values; The rep is necessary as ifelse will only return a length equiv. of input.
+          N_Calc <- ifelse(rep(length(numerator) > 1,nrow(Unified)),rowSums(Unified[,numerator]),Unified[,numerator])
+          D_Calc <- ifelse(rep(length(denominator) > 1,nrow(Unified)),rowSums(Unified[,denominator]),Unified[,denominator])
+          # Calculate Rates
+          tmp_calc <- data.frame(N_Calc / D_Calc * 100)
+          colnames(tmp_calc) <- Num_Dem_Census[i,"Name"]
+          # Append Rates
+          WZ_Census_Variables <- cbind(WZ_Census_Variables,tmp_calc)
+          #Clean Up
+          rm(list=c("N_Calc","D_Calc","tmp_calc"))
+
+}
+
+
+# Replace the missing values with zeros - these are workplace zones without postcodes within the buffers
+WZ_Census_Variables[is.na(WZ_Census_Variables)] <- 0 #replace NA with 0
+
+```
+
+
+```{r echo=FALSE}
+#Create a diversity index (WP605EW: Industry (Workplace population))
+div_input <- Unified[,c("WP605EW0002","WP605EW0003","WP605EW0004","WP605EW0012","WP605EW0013","WP605EW0014","WP605EW0015","WP605EW0016","WP605EW0017","WP605EW0018","WP605EW0019","WP605EW0020","WP605EW0021","WP605EW0022","WP605EW0023","WP605EW0024","WP605EW0025","WP605EW0026","WP605EW0027","WP605EW0028")]
+rownames(div_input) <- Unified[,"WZ_CODE"]
+
+# Calculate Index
+WZ_simp <- data.frame(WZ_IND_DIV = diversity(div_input, "simpson"))
+WZ_simp$WZ_CODE <- rownames(WZ_simp)
+
+# Create Census Extra Variables
+WZ_Census_Variables_Extra <- data.frame(WZ_CODE = Unified[,"WZ_CODE"],
+                                  W_Density = Unified[,"WP102EW0003"],
+                                  W_NoUK = (Unified[,"WP203EW0001"]-Unified[,"WP203EW0003"]) / Unified[,"WP203EW0001"],
+                                  W_AvDist = Unified[,"WP702EW0013"],
+                                  R_OldRatio = WZ_Census_Variables[,"R_64plus"] / WZ_Census_Variables[,"R_16_24"])
+
+WZ_Census_Variables_Extra <- merge(WZ_Census_Variables_Extra,WZ_simp,by="WZ_CODE",all.x=TRUE)
+
+# Replace the missing values with zeros - these are workplace zones without postcodes within the buffers
+WZ_Census_Variables_Extra[is.na(WZ_Census_Variables_Extra)] <- 0 #replace NA with 0
+
+summary(WZ_Census_Variables_Extra$W_AvDist)
+
+#cap to 99th percentile
+WZ_Census_Variables_Extra$W_AvDist <- ifelse(WZ_Census_Variables_Extra$W_AvDist < quantile(WZ_Census_Variables_Extra$W_AvDist, 0.99), WZ_Census_Variables_Extra$W_AvDist, quantile(WZ_Census_Variables_Extra$W_AvDist, 0.99))
+
+summary(WZ_Census_Variables_Extra$W_AvDist)
+
+```
+
+**Figure 15: Diversity of Industry Types**
+
+```{r echo=FALSE}
+tmpS <- WZ_London
+tmpS <- merge(tmpS,WZ_Census_Variables_Extra,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Map
+m <- tm_shape(tmpS,projection = 27700) +
+  tm_polygons("WZ_IND_DIV",  title="Diversity",style="kmeans",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65)
+print(m)
+```
+
+```{r echo=FALSE, cache = FALSE}
+# IDBR
+WZ_IDBR_Vars <- data.frame(WZ_CODE = IDBR_workplaces$Census.Workplace.Zone.code,IDBR_C_9_15 = IDBR_workplaces$C_9_15)
+# LDC
+colnames(WZ_LDC_PCT) <- c("WZ_CODE",paste0("LDC_",colnames(WZ_LDC_PCT[-1])))
+  
+#TFL
+colnames(WZ_PTAL) <- c("WZ_CODE","TFL_AvPTAI2015")
+
+# Flows
+WZ_Flow <- data.frame(WZ_CODE=WZ_in_out$WZ_CODE,WZ_F_Outside=WZ_in_out$PCT_Outside)
+
+# WZ OA Pop Ratio
+WZ_MIX <- data.frame(WZ_CODE=WZ_MIX$WZ_CODE,WZ_OA_MIX=WZ_MIX$WD_R_MIX)
+
+# Merge
+Master_Input <- merge(WZ_Census_Variables,WZ_Census_Variables_Extra,by="WZ_CODE",all.x=TRUE)
+Master_Input <- merge(Master_Input,WZ_IDBR_Vars,by="WZ_CODE",all.x=TRUE)
+Master_Input <- merge(Master_Input,WZ_LDC_PCT,by="WZ_CODE",all.x=TRUE)
+Master_Input <- merge(Master_Input,WZ_PTAL,by="WZ_CODE",all.x=TRUE)
+Master_Input <- merge(Master_Input,WZ_Flow,by="WZ_CODE",all.x=TRUE)
+Master_Input <- merge(Master_Input,WZ_MIX,by="WZ_CODE",all.x=TRUE)
+
+
+save(Master_Input,file="./Rdata_Files/Master_Input.Rdata")
+```
+
+# Variable Evaluation
+
+**Table 4: Candidate input data summary statistics (see appendix for the full table).**
+
+```{r echo=FALSE}
+
+# Import lookup tables
+Input_Variable_Descriptions <- read.csv("Input_Variable_Descriptions.csv")
+
+#Create summary stats
+sumry_stats <- data.frame(describe(Master_Input[-1])[,c("mean","median","sd","min","max")])
+sumry_stats$Name <- rownames(sumry_stats)
+
+sumry_stats <- merge(sumry_stats,Input_Variable_Descriptions,by="Name",all.x=TRUE)
+sumry_stats <- sumry_stats[,c(7,2:6,8,1)]
+colnames(sumry_stats) <- c("Variable","Mean","Median","SD","Min","Max","Census Table","ID")
+
+write.csv(sumry_stats,"SUMSTATS.csv")
+
+# Print an example table
+kable(sumry_stats[1:10,],digits = 3)
+
+```
+
+## Variable Standardisation and Outliers
+
+```{r}
+
+tmp <- data.frame(apply(Master_Input[,-1],2, function(x) length(boxplot.stats(x)$out)))# frq outlier values.
+tmp$Variable <- rownames(tmp)
+colnames(tmp) <- c("Frequency","Name")
+
+tmp <- merge(tmp,Input_Variable_Descriptions,by = "Name")
+
+kable(tmp[,c("Description","Domain","Frequency")])
+
+```
+
+
+```{r echo=FALSE}
+# Range standardise variables
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+Master_Input_1_0 <- data.frame(WZ_CODE = Master_Input$WZ_CODE,apply(Master_Input[,2:ncol(Master_Input)], MARGIN=2, FUN=range01))
+
+
+```
+
+
+
+## Variable Correlation
+
+**Figure 16: Correlation Matrix**
+
+```{r echo=FALSE}
+# Create correlation matrix
+COR <- cor(Master_Input_1_0[,2:ncol(Master_Input_1_0)])
+
+#Create COR sums.....
+cor_sum <- data.frame(COR_SUM = apply(abs(COR),2,sum))
+cor_sum$Names <- rownames(cor_sum)
+
+#pdf("Cor_Plot.pdf")
+corrplot(COR, method="circle",order="hclust",tl.cex=0.3)
+#dev.off()
+```
+
+**Table 5: Pairs of variables that are strongly (positively or negatively) correlated; with suggestions for removal.**
+
+```{r echo=FALSE,results='asis'}
+
+## keep only the lower triangle by 
+## filling upper with NA
+COR[upper.tri(COR, diag=TRUE)] <- NA
+
+m <- melt(COR)
+
+## sort by descending absolute correlation
+m <- m[order(- abs(m$value)), ]
+
+## omit the NA values
+m <- na.omit(m)
+
+write.csv(m,"FULL_COR_LIST.csv")
+
+#Subset pairs over .8
+Query_Variables <- subset(m, abs(value) > 0.8)
+colnames(Query_Variables) <- c("Var1","Var2","Cor")
+
+```
+
+
+```{r echo=FALSE}
+
+# Compare the pairs and drop the variable with most overall correlation
+rm_list <- NA
+rm_scores <- NA
+
+for (i in 1:nrow(Query_Variables)){
+  
+V1 <- Query_Variables[i,"Var1"]
+V2 <- Query_Variables[i,"Var2"]
+
+#Select the absolute sum of the correlations for each variable
+
+V1_sum <- cor_sum[cor_sum$Names == V1,"COR_SUM"]
+V2_sum <- cor_sum[cor_sum$Names == V2,"COR_SUM"]
+
+if (V1_sum == V2_sum){
+  rm_tmp <- "TIED"
+} else if (V1_sum > V2_sum) {
+  rm_tmp <- Query_Variables[i,"Var1"]
+} else {
+  rm_tmp <- Query_Variables[i,"Var2"]
+}
+
+#Create variable list
+rm_list <- c(rm_list,paste(rm_tmp))
+rm(rm_tmp)
+
+# list scores
+  tmp_score <- cbind(V1_sum,V2_sum)
+  rm_scores <- rbind(rm_scores,tmp_score)
+}
+
+# For each row, these are the variables to remove
+rm_list <- rm_list[-1]
+rm_scores <- rm_scores[-1,]
+
+# Create output table
+
+tmp_cor_out <- cbind(Query_Variables,rm_scores,rm_list)
+
+tmp_cor_out <- merge(tmp_cor_out,Input_Variable_Descriptions[,c("Name","Description")], by.x="Var1",by.y="Name",all.x=TRUE) #Variable 1
+colnames(tmp_cor_out) <- c("Var1","Var2","Cor","V1_sum","V2_sum","rm_list","Variable 1")
+
+tmp_cor_out <- merge(tmp_cor_out,Input_Variable_Descriptions[,c("Name","Description")], by.x="Var2",by.y="Name",all.x=TRUE) #Variable 2
+colnames(tmp_cor_out) <- c("Var1","Var2","Cor","V1_sum","V2_sum","rm_list","Variable 1","Variable 2")
+
+tmp_cor_out <- merge(tmp_cor_out,Input_Variable_Descriptions[,c("Name","Description")], by.x="rm_list",by.y="Name",all.x=TRUE) #Remove
+colnames(tmp_cor_out) <- c("rm_list","Var1","Var2","Cor","V1_sum","V2_sum","Variable 1","Variable 2","Remove Variable")
+
+# Remove unwanted variables & sort out column order
+tmp_cor_out <- tmp_cor_out[ , -which(names(tmp_cor_out) %in% c("Var1","Var2","rm_list"))]
+tmp_cor_out <- tmp_cor_out[,c(4,5,1,2,3,6)]
+# 
+colnames(tmp_cor_out) <- c("Variable 1","Variable 2","Correlation","Sum Correlation (V1)","Sum Correlation (V2)","Remove Variable")
+
+
+kable(tmp_cor_out,digits = 2)
+
+
+# write.csv(tmp_cor_out,"removal_query.csv")
+
+
+```
+
+*Table 6: Variables to remove.*
+
+```{r echo=FALSE}
+# Variables identified to remove with poor distributions / low counts etc
+removal_bad <- c("LDC_CONV","LDC_COMP","LDC_LEI","LDC_SER","W_Agric","W_Elect","W_extraterritorial","W_HouseholdEmp","W_Water","W_Mining","W_F65p","W_Nafrica","W_BadHealth","W_GoodHealth","W_OthBlac","W_Other_EthnicG","W_White_Gypsy","W_Motorcycle","W_Taxi","W_SE_Pt")
+
+# Variable identified to be removed through correlation
+removal_corr <- c("LDC_COMP","LDC_LEI","R_LoneParent_PT","R_IA_Ret","W_16_24","W_25_39","W_40_64","W_65p","W_Afr","W_AvDist","W_BUK","W_Carr","W_EastAsia","W_Ftime","W_GoodHealth","W_WkHome","W_L1","W_NoQual","W_NoFixPl","W_NoUK","W_UK","W_PT1630","W_Res10p","W_Sales","W_Sasia","W_SE_Pt2","W_Train","W_UnderG","W_White","W_home","W_NoFixPl","W_SE_Ft","W_5_10km","R_64plus")
+
+
+
+# Combined list
+variables_to_remove <- data.frame(Variable = unique(c(removal_bad,removal_corr)))
+variables_to_remove$Distribution <- ifelse(variables_to_remove$Variable %in% removal_bad,1,0)
+variables_to_remove$Correlation <- ifelse(variables_to_remove$Variable %in% removal_corr,1,0)
+
+variables_to_remove <- merge(variables_to_remove,Input_Variable_Descriptions,by.x="Variable",by.y="Name",all.x=TRUE)
+
+kable(variables_to_remove[order(variables_to_remove$Domain,variables_to_remove$Census_Table),c(4,2,3,6,5,1)])
+
+```
+
+
+```{r echo=FALSE}
+# create cut down inputs and append new variable
+Master_Input_1_0_CUT <- Master_Input_1_0[ , !(colnames(Master_Input_1_0) %in% variables_to_remove$Variable)]
+
+# Append total WZ pop
+Master_Input_1_0_CUT <- merge(Master_Input_1_0_CUT,wz_London[,c("WZ_CODE","WP102EW0001","WP102EW0003")],by="WZ_CODE",all.x=TRUE)
+
+# Append total WZ pop
+Master_Input_1_0 <- merge(Master_Input_1_0,wz_London[,c("WZ_CODE","WP102EW0001","WP102EW0003")],by="WZ_CODE",all.x=TRUE)
+
+# Save final object
+save(Master_Input_1_0_CUT, file="./Rdata_Files/Master_Input_1_0_CUT.RData")
+save(Master_Input_1_0, file="./Rdata_Files/Master_Input_1_0.RData")
+
+```
+
+
+```{r echo=FALSE, eval=FALSE}
+## Variable mapping
+
+#Generate maps for all variables
+
+# Read Shapefile
+WZ_London_clip_gen <- readOGR(dsn = "./Shapefiles/", layer = "WZ_London_clip_gen", verbose = FALSE)
+#Ensure uniform projection
+WZ_London_clip_gen = spTransform(WZ_London_clip_gen, CRS("+init=epsg:27700"))
+
+tmp8 <- WZ_London_clip_gen
+tmp8 <- merge(tmp8,Master_Input_1_0,by.x="code",by.y="WZ_CODE",all.x=TRUE)
+
+# Create Maps
+for (i in 4:ncol(tmp8)){
+png(paste0("./png_maps/",names(tmp8[,i]),".png"))
+  m <- tm_shape(tmp8,projection = 27700) +
+  tm_polygons(names(tmp8[,i]),  title=names(tmp8[,i]),style="kmeans",  border.col =NA, border.alpha = 0) +
+  tm_layout(legend.position = c("left", "bottom"), frame = FALSE,legend.text.size = 0.65) +
+  tm_scale_bar(width=0.1)
+  print(m)
+dev.off()
+}
+  
+```
+
+
+```{r eval = FALSE, echo= FALSE}
+# This code can be implemented to create IHS or Box Cox standardised values
+
+#IHS
+#Master_Input_1_0_CUT_IHS <- data.frame(WZ_CODE = Master_Input_1_0_CUT$WZ_CODE, asinh(Master_Input_1_0_CUT[,names(Master_Input_1_0_CUT[-1])]))
+
+# This function Estimates Lambda #
+# find_lambda <- function (data, lam = seq(-3, 3, 0.01), sample = 5000) 
+# {
+# data <- sample(data,sample)
+# sw <- NULL
+# for (i in 1:length(lam)) {
+#   if (round(lam[i], 2) != 0) 
+#     sw <- rbind(sw, c(lam[i], shapiro.test((data^(lam[i]) - 1)/(lam[i]))$statistic))
+#   if (round(lam[i], 2) == 0) 
+#     sw <- rbind(sw, c(lam[i], shapiro.test(log(data))$statistic))
+# }
+# swlam <- sw[which.max(sw[, 2]), 1]
+# return(swlam)
+# }
+# 
+# # Find Lambda
+# tmp_lmd <- apply(Master_Input_1_0_CUT[-1],2,find_lambda)
+# 
+# #Box Cox
+# Master_Input_1_0_CUT_BC <- data.frame(WZ_CODE = Master_Input_1_0_CUT$WZ_CODE,bcPower(Master_Input_1_0_CUT[-1]+1,tmp_lmd)) # Calculate box cox (constant 1 added to avoid 0 issue)
+# colnames(Master_Input_1_0_CUT_BC) <- colnames(Master_Input_1_0_CUT)
+
+```
+
+```{r echo = FALSE, eval= FALSE}
+# The following code creates histograms
+
+pvar <- colnames(Master_Input_1_0[-1])
+
+for (i in 1:length(pvar)){
+      png(paste0("./png_hist/",pvar[i],".png"),width = 600)
+      print(qplot(Master_Input_1_0[,pvar[i]], geom="histogram",main=paste0(Input_Variable_Descriptions[Input_Variable_Descriptions$Name == pvar[i],"Description"]," (",pvar[i],")")))
+      dev.off()
+}
+
+
+
+
+
+
+
+```
+
+**Appendix Table 1: Candidate input data summary statistics (Full Table)**
+
+```{r echo=FALSE,results='asis'}
+# Print an example table
+kable(sumry_stats[order(sumry_stats$`Census Table`,decreasing = TRUE),],digits = 3)
+
+```
+
+**Appendix 2: Variables and Outcomes**
+
+```{r}
+
+variables_to_remove_2 <- merge(Input_Variable_Descriptions,variables_to_remove,by.x="Name",by.y="Variable",all.x=TRUE)
+variables_to_remove_2$Description.y <- NULL
+variables_to_remove_2$Census_Table.y <- NULL
+variables_to_remove_2$Domain.y <- NULL
+
+variables_to_remove_2$Keep <- ifelse((is.na(variables_to_remove_2$Distribution)&is.na(variables_to_remove_2$Correlation)),1,0)
+
+variables_to_remove_2[is.na(variables_to_remove_2)] <- 0
+
+colnames(variables_to_remove_2) <- c("Name","Description","Census Table","Domain","Distribution","Correlation","Keep")
+
+kable(variables_to_remove_2[,c(2,4,7,5,6,3,1)])
+
+write.csv(variables_to_remove_2[,c(2,4,7,5,6,3,1)],"VARIABLE SELECTION.csv")
+
+
+```
+
+
